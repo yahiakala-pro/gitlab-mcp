@@ -2922,6 +2922,11 @@ export const DeleteIssueSchema = z.object({
   issue_iid: z.coerce.string().describe("The internal ID of the project issue"),
 });
 
+export const DeleteWorkItemSchema = z.object({
+  project_id: z.coerce.string().describe("Project ID or URL-encoded path"),
+  iid: z.coerce.string().describe("The internal ID of the work item"),
+});
+
 export const UpdateIssueDescriptionPatchSchema = z.object({
   project_id: z.coerce.string().describe("Project ID or URL-encoded path"),
   issue_iid: z.coerce.string().describe("The internal ID of the project issue"),

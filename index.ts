@@ -340,6 +340,7 @@ import {
   DeleteGroupWikiPageSchema,
   DeleteIssueLinkSchema,
   DeleteIssueSchema,
+  DeleteWorkItemSchema,
   DeleteIssueEmojiReactionSchema,
   DeleteIssueNoteEmojiReactionSchema,
   DeleteLabelSchema,
@@ -3565,6 +3566,35 @@ async function listGraphQLAwardEmoji(awardableId: string): Promise<any[]> {
   return data.awardable?.awardEmoji?.nodes ?? [];
 }
 
+/**
+ * List emoji reactions on a work item via its AwardEmoji widget.
+ * (`Query.awardable` does not exist on GitLab CE 18.11, but
+ * `WorkItemWidgetAwardEmoji.awardEmoji` does.)
+ */
+async function listWorkItemAwardEmoji(workItemGID: string): Promise<any[]> {
+  const data = await executeGraphQL<{
+    workItem?: {
+      widgets?: {
+        __typename?: string;
+        awardEmoji?: { nodes: { name: string; user: { username: string } }[] } | null;
+      }[];
+    } | null;
+  }>(
+    `query($id: WorkItemID!) {
+      workItem(id: $id) {
+        widgets {
+          __typename
+          ... on WorkItemWidgetAwardEmoji { awardEmoji { nodes { name user { username } } } }
+        }
+      }
+    }`,
+    { id: workItemGID }
+  );
+  const widgets = data.workItem?.widgets ?? [];
+  const emojiWidget = widgets.find((w) => w.__typename === "WorkItemWidgetAwardEmoji");
+  return emojiWidget?.awardEmoji?.nodes ?? [];
+}
+
 async function removeGraphQLAwardEmoji(awardableId: string, name: string): Promise<any> {
   const data = await executeGraphQL<{
     awardEmojiRemove: { awardEmoji: { name: string } | null; errors: string[] };
@@ -3886,26 +3916,11 @@ async function getWorkItem(projectId: string, iid: number): Promise<any> {
               parent { id iid title webUrl workItemType { name } namespace { fullPath } }
               children { nodes { id iid title state webUrl workItemType { name } namespace { fullPath } } }
             }
-            ... on WorkItemWidgetStatus { status { id name category color iconName position } }
-            ... on WorkItemWidgetCustomFields {
-              customFieldValues {
-                __typename
-                customField { id name fieldType }
-                ... on WorkItemNumberFieldValue { value }
-                ... on WorkItemTextFieldValue { value }
-                ... on WorkItemSelectFieldValue {
-                  selectedOptions { id value }
-                }
-              }
-            }
             ... on WorkItemWidgetLabels { labels { nodes { id title color } } }
             ... on WorkItemWidgetAssignees { assignees { nodes { id username name } } }
-            ... on WorkItemWidgetWeight { weight rolledUpWeight rolledUpCompletedWeight }
-            ... on WorkItemWidgetHealthStatus { healthStatus }
             ... on WorkItemWidgetStartAndDueDate { startDate dueDate }
             ... on WorkItemWidgetMilestone { milestone { id title } }
             ... on WorkItemWidgetLinkedItems {
-              blocked blockedByCount blockingCount
               linkedItems { nodes { linkType workItem { id iid title state webUrl workItemType { name } namespace { fullPath } } } }
             }
             ... on WorkItemWidgetTimeTracking {
@@ -3922,13 +3937,7 @@ async function getWorkItem(projectId: string, iid: number): Promise<any> {
                   mergeRequest { iid title webUrl state sourceBranch }
                 }
               }
-              featureFlags { nodes { name active } }
             }
-            ... on WorkItemWidgetIteration {
-              iteration { id title startDate dueDate webUrl iterationCadence { id title } }
-            }
-            ... on WorkItemWidgetProgress { progress }
-            ... on WorkItemWidgetColor { color textColor }
           }
         }
       }
@@ -4152,11 +4161,8 @@ async function listWorkItems(
             id iid title state webUrl workItemType { name }
             widgets {
               __typename
-              ... on WorkItemWidgetStatus { status { id name category color } }
               ... on WorkItemWidgetLabels { labels { nodes { title } } }
               ... on WorkItemWidgetAssignees { assignees { nodes { username } } }
-              ... on WorkItemWidgetWeight { weight }
-              ... on WorkItemWidgetHealthStatus { healthStatus }
               ... on WorkItemWidgetStartAndDueDate { startDate dueDate }
               ... on WorkItemWidgetMilestone { milestone { id title } }
             }
@@ -4477,24 +4483,6 @@ async function updateWorkItem(
     variables.stateEvent = options.state_event === "close" ? "CLOSE" : "REOPEN";
   }
 
-  if (options.weight !== undefined) {
-    varDefs.push("$weight: Int");
-    inputParts.push("weightWidget: { weight: $weight }");
-    variables.weight = options.weight;
-  }
-
-  if (options.status !== undefined) {
-    varDefs.push("$status: WorkItemsStatusesStatusID");
-    inputParts.push("statusWidget: { status: $status }");
-    variables.status = options.status;
-  }
-
-  if (options.health_status !== undefined) {
-    varDefs.push("$healthStatus: HealthStatus");
-    inputParts.push("healthStatusWidget: { healthStatus: $healthStatus }");
-    variables.healthStatus = options.health_status;
-  }
-
   // Start and due date widget - combine into one widget
   if (options.start_date !== undefined || options.due_date !== undefined) {
     const dateParts: string[] = [];
@@ -4521,37 +4509,10 @@ async function updateWorkItem(
     variables.milestoneId = milestoneGID;
   }
 
-  if (options.iteration_id !== undefined) {
-    const iterationGID = options.iteration_id.startsWith("gid://")
-      ? options.iteration_id
-      : `gid://gitlab/Iteration/${options.iteration_id}`;
-    varDefs.push("$iterationId: IterationID");
-    inputParts.push("iterationWidget: { iterationId: $iterationId }");
-    variables.iterationId = iterationGID;
-  }
-
   if (options.confidential !== undefined) {
     varDefs.push("$confidential: Boolean");
     inputParts.push("confidential: $confidential");
     variables.confidential = options.confidential;
-  }
-
-  // Custom fields widget
-  if (options.custom_fields && options.custom_fields.length > 0) {
-    const cfValues = options.custom_fields.map(cf => {
-      const cfId = cf.custom_field_id.startsWith("gid://")
-        ? cf.custom_field_id
-        : `gid://gitlab/IssuablesCustomField/${cf.custom_field_id}`;
-      const val: any = { customFieldId: cfId };
-      if (cf.text_value !== undefined) val.textValue = cf.text_value;
-      if (cf.number_value !== undefined) val.numberValue = cf.number_value;
-      if (cf.selected_option_ids !== undefined) val.selectedOptionIds = cf.selected_option_ids;
-      if (cf.date_value !== undefined) val.dateValue = cf.date_value;
-      return val;
-    });
-    varDefs.push("$customFieldsWidget: [WorkItemWidgetCustomFieldValueInputType!]");
-    inputParts.push("customFieldsWidget: $customFieldsWidget");
-    variables.customFieldsWidget = cfValues;
   }
 
   // Hierarchy: set parent or remove parent
@@ -4580,14 +4541,11 @@ async function updateWorkItem(
         workItemType { name }
         widgets {
           __typename
-          ... on WorkItemWidgetStatus { status { id name category color } }
           ... on WorkItemWidgetLabels { labels { nodes { title } } }
           ... on WorkItemWidgetAssignees { assignees { nodes { username } } }
-          ... on WorkItemWidgetWeight { weight }
           ... on WorkItemWidgetHierarchy {
             parent { id title workItemType { name } }
           }
-          ... on WorkItemWidgetHealthStatus { healthStatus }
           ... on WorkItemWidgetStartAndDueDate { startDate dueDate }
           ... on WorkItemWidgetMilestone { milestone { id title } }
         }
@@ -12882,6 +12840,24 @@ async function handleToolCall(params: any) {
         };
       }
 
+      case "delete_work_item": {
+        // REST DELETE is uniform across work item types (verified on GitLab CE 18.11).
+        const args = DeleteWorkItemSchema.parse(params.arguments);
+        await deleteIssue(args.project_id, args.iid);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                { status: "success", message: "Work item deleted" },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+
       case "delete_issue": {
         const args = DeleteIssueSchema.parse(params.arguments);
         await deleteIssue(args.project_id, args.issue_iid);
@@ -13045,7 +13021,7 @@ async function handleToolCall(params: any) {
       case "list_work_item_emoji_reactions": {
         const args = ListWorkItemEmojiReactionsSchema.parse(params.arguments);
         const { workItemGID } = await resolveWorkItemGID(args.project_id, args.iid);
-        const result = await listGraphQLAwardEmoji(workItemGID);
+        const result = await listWorkItemAwardEmoji(workItemGID);
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
       }
 
