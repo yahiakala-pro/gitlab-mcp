@@ -53,6 +53,31 @@ sink → get readback → list search/state → emoji add/list/delete → delete
 of these paths — that is how the CE drift landed silently. Run it with
 `GITLAB_PERSONAL_ACCESS_TOKEN`, `GITLAB_API_URL`, `TEST_PROJECT_ID`.
 
+## Publishing the image
+
+Build for **both** platforms and push in one step (Docker Desktop has
+`buildx` built in):
+
+```bash
+docker login gitlab.prolucid.ca:9090 -u <user> --password-stdin   # PAT, api scope
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t gitlab.prolucid.ca:9090/reference-architectures/llm-reference-designs/gitlab-mcp:v<base>-ce.<n> \
+  --push .
+docker buildx imagetools inspect \
+  gitlab.prolucid.ca:9090/reference-architectures/llm-reference-designs/gitlab-mcp:v<base>-ce.<n>
+```
+
+- **Never build single-platform** (`--platform linux/amd64` alone) — the image
+  must run on Docker Desktop for Mac (Apple Silicon needs the `arm64` leg).
+- Run the build **on a Mac** if one is available: `arm64` builds natively there;
+  from an x86 machine the `arm64` leg is emulated and slow, and the alpine
+  `npm ci` step can hang under emulation (see the Dockerfile header comment).
+- After pushing, pin the new digest into `mcp-gateway/profile.yaml` (both
+  `image:` fields) and redeploy per its README.
+
+The same command works for any registry — swap the `gitlab.prolucid.ca:9090/...`
+name for wherever you're pushing to (e.g. `ghcr.io/<user>/gitlab-mcp`).
+
 ## Revisit trigger
 
 When a `zereight` release queries `workItemFeatures`/widgets in a way that
