@@ -55,28 +55,29 @@ of these paths — that is how the CE drift landed silently. Run it with
 
 ## Publishing the image
 
-Build for **both** platforms and push in one step (Docker Desktop has
-`buildx` built in):
+A `v<base>-ce.<n>` tag pushed to `github` is a release:
+[docker-publish-ce.yml](.github/workflows/docker-publish-ce.yml) builds each
+platform natively (amd64 on `ubuntu-latest`, arm64 on GitHub's free arm64
+runner — the fork is public) and pushes the merged manifest to
+`ghcr.io/yahiakala-pro/gitlab-mcp:<tag>` with the workflow's `GITHUB_TOKEN` —
+no PAT, no Docker Hub, no QEMU (the alpine `npm ci` hang the Dockerfile
+header documents only bites under emulation):
 
 ```bash
-docker login gitlab.prolucid.ca:9090 -u <user> --password-stdin   # PAT, api scope
-docker buildx build --platform linux/amd64,linux/arm64 \
-  -t gitlab.prolucid.ca:9090/reference-architectures/llm-reference-designs/gitlab-mcp:v<base>-ce.<n> \
-  --push .
-docker buildx imagetools inspect \
-  gitlab.prolucid.ca:9090/reference-architectures/llm-reference-designs/gitlab-mcp:v<base>-ce.<n>
+git push github patch-v2.2.6          # or its rebased successor
+git tag v<base>-ce.<n>
+git push github v<base>-ce.<n>
 ```
 
-- **Never build single-platform** (`--platform linux/amd64` alone) — the image
-  must run on Docker Desktop for Mac (Apple Silicon needs the `arm64` leg).
-- Run the build **on a Mac** if one is available: `arm64` builds natively there;
-  from an x86 machine the `arm64` leg is emulated and slow, and the alpine
-  `npm ci` step can hang under emulation (see the Dockerfile header comment).
-- After pushing, pin the new digest into `mcp-gateway/profile.yaml` (both
-  `image:` fields) and redeploy per its README.
-
-The same command works for any registry — swap the `gitlab.prolucid.ca:9090/...`
-name for wherever you're pushing to (e.g. `ghcr.io/<user>/gitlab-mcp`).
+- Tag events run from the **tagged commit's tree** — the workflow file must
+  be on the tagged branch (it rides the patch branch; a rebase carries it).
+- **First release only**: GHCR packages start private. Flip it to public once
+  at https://github.com/users/yahiakala-pro/packages/container/gitlab-mcp/settings
+- Verify without logging in:
+  `docker buildx imagetools inspect ghcr.io/yahiakala-pro/gitlab-mcp:v<base>-ce.<n>`
+- After publishing, pin the new digest into `mcp-gateway/profile.yaml` (both
+  `image:` fields) and redeploy per its README — retiring the
+  `gitlab.prolucid.ca:9090` reference in the process.
 
 ## Revisit trigger
 
